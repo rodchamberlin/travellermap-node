@@ -327,6 +327,14 @@ export class WorldGen {
 
     static makePhysicalWorld(random: FluxRandom, dms: UWPDMs) : Pick<UWPElements,'size'|'atmosphere'|'hydrographic'|'notes'> {
         const size = Math.min(dms.maxSize ?? 24, Math.max(0,random.die(6,dms.sizeDice??2)+(dms.size ?? 0)));
+        if(size === 0) {
+            return {
+                size,
+                atmosphere: 0,
+                hydrographic: 0,
+                notes: new Set(dms.notes),
+            };
+        }
         const atmosphere = Math.max(0,Math.min(15,size + random.flux() + (dms.atmosphere??0)));
         const hydrographic = WorldGen.makeHydrographic(random, size, atmosphere, dms.hydrographic??0);
 
@@ -459,6 +467,13 @@ export class WorldGen {
             techLevel = prevalentTL + fluxAmountCalc(random, 5, 1);
         } else {
             techLevel = WorldGen.makeTL(random, starport, elements.size ?? 0, elements.atmosphere ?? 0, elements.hydrographic ?? 0, population, govt??0, dms.techLevel ?? 0);
+            const TLO = Math.ceil((techLevel - (this.world.techLevel??0))/2);
+            if(TLO > 0) {
+                techLevel = (this.world.techLevel??0) + TLO;
+            }
+            if(techLevel > 15) {
+                logger.error(`${this.world.hex} TL=${techLevel} WTL=${this.world.techLevel} XTL=${TLO}`);
+            }
         }
 
         const uwp: UWPElements = {
