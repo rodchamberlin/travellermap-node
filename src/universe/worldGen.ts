@@ -21,6 +21,7 @@ export type UWPDMs = {
     maxSize?: number,
     maxPopulation?: number,
     maxPopulationDigit?: number,
+    beltNotAllowed?: boolean,
     notes?: string[],
 };
 
@@ -328,6 +329,9 @@ export class WorldGen {
     static makePhysicalWorld(random: FluxRandom, dms: UWPDMs) : Pick<UWPElements,'size'|'atmosphere'|'hydrographic'|'notes'> {
         const size = Math.min(dms.maxSize ?? 24, Math.max(0,random.die(6,dms.sizeDice??2)+(dms.size ?? 0)));
         if(size === 0) {
+            if(dms.beltNotAllowed) {
+                return this.makePhysicalWorld(random, dms);
+            }
             return {
                 size,
                 atmosphere: 0,
@@ -365,7 +369,7 @@ export class WorldGen {
             return undefined;
         }
 
-        if(random.die(4+factions.length) < factions.length) {
+        if(random.die(4+factions.length) != 1) {
             // Use existing faction
             while(true) {
                 const worldDie = random.die(factions.length) - 1;
@@ -679,7 +683,7 @@ export class WorldGen {
 
         let dms: UWPDMs = this.uwpDMs(posOffset, false);
 
-        const world = this.makeWorld(body, pos, { ...dms, maxPopulation: this.uwp.population ?? 0, maxPopulationDigit: this.uwp.populationDigit ?? 1,});
+        const world = this.makeWorld(body, pos, { ...dms, maxPopulation: this.uwp.population ?? 0, maxPopulationDigit: this.uwp.populationDigit ?? 1, beltNotAllowed: true});
         const newBody = this.stellarBodyForPlanet(`${body.name}-${pos}`, StellarBodyPlanet.maxSatelliteOrbitsForOrbit(pos, world.size), world, body);
         body.setOrbit(pos, newBody);
         this.postProcessWorld(random, newBody);
@@ -714,7 +718,7 @@ export class WorldGen {
         let dms: UWPDMs = this.uwpDMs(target-hz, true);
         const maxSize = body.uwp.size;
 
-        const world = this.makeWorld(body, target, { ...dms, maxSize, maxPopulation: this.uwp.population ?? 0, maxPopulationDigit: this.uwp.populationDigit ?? 1,})
+        const world = this.makeWorld(body, target, { ...dms, maxSize, maxPopulation: this.uwp.population ?? 0, maxPopulationDigit: this.uwp.populationDigit ?? 1, beltNotAllowed: true})
         const newBody = this.stellarBodyForPlanet(`${body.name}-${target}`, 0, world, body);
         body.setOrbit(target, newBody);
         this.postProcessWorld(random, newBody);

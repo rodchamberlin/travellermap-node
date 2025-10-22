@@ -49,7 +49,10 @@ if(opts['byWorld']) {
     }, {} as Record<string,OverrideWorld[]>) ?? {}
 
     for(const group of Object.keys(grouped)) {
-        fs.writeFileSync(`${opts['output']}/${group}.yml`, YAML.stringify(grouped[group]));
+        fs.writeFileSync(`${opts['output']}/${group}.yml`, YAML.stringify({
+            sector: program.args[0],
+            world: grouped[group]
+        }));
     }
 } else {
     const mapped = {
