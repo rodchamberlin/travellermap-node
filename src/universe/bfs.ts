@@ -38,6 +38,23 @@ export function worldBfs(universe: Universe, from: World, to: World, jump: numbe
     return result;
 }
 
+export function worldCluster(universe: Universe, from: World, jump: number, worldValid: (w: World) => boolean, range: number): Map<World, number> {
+    let active: Set<World> = new Set([from]);
+    const result = new Map<World, number>([[from,0]]);
+
+    for(let iter = 0; iter < range && active.size > 0; ++iter) {
+        const nextActive = new Set<World>();
+        for(const [fromWorld, toWorld] of activeJumpIterator(universe, active, jump, worldValid)) {
+            if(!result.has(toWorld)) {
+                result.set(toWorld, iter+1);
+                nextActive.add(toWorld);
+            }
+        }
+        active = nextActive;
+    }
+    return result;
+}
+
 
 function* activeJumpIterator(universe: Universe, active: Set<World>, jump: number, worldValid: (w: World) => boolean) {
     const visited: Set<World> = new Set(active);

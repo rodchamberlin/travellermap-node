@@ -543,8 +543,8 @@ export class Sector {
         //this.enrichWorlds();
     }
 
-    enrichWorlds(): Array<OverrideWorld> {
-        return <any>[...this.worlds.values().filter(w => !w.hasOverride).flatMap(w => w.enrichWorld() ?? [])];
+    enrichWorlds(universe: Universe): Array<OverrideWorld> {
+        return <any>[...this.worlds.values().filter(w => !w.hasOverride).flatMap(w => w.enrichWorld(universe) ?? [])];
     }
 
     sectorMatch(name: string|undefined) {

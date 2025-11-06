@@ -20,6 +20,17 @@ export type Classification = {
 
 
 export const CLASSIFICATIONS: Classification[] = [
+    { code: 'Hz', definition: 'Habitable Zone', other: (body) => {
+        let parent = body.parent;
+        while(parent && !('driveLimits' in parent)) {
+            body = parent;
+            parent = parent.parent;
+        }
+        if(parent && body && body.orbit === parent.driveLimits.hz) {
+            return true;
+        }
+        return false;
+        }},
     { code: 'As', definition: 'Asteroid Belt', siz: '0', atm: '0', hyd: '0', other: (body, worldUWP) => !body.uwp?.notes?.has('Wlt')},
     { code: 'De', definition: 'Desert', atm: '23456789', hyd: '0'},
     { code: 'Fl', definition: 'Fluid', atm: 'ABC', hyd: '123456789A'},

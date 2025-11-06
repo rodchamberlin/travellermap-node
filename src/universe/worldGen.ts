@@ -1,9 +1,11 @@
-import {fluxAmountCalc, FluxRandom} from "../util.js";
+import {assignedPop, fluxAmountCalc, FluxRandom, techMult} from "../util.js";
 import {Notes, World} from "./world.js";
 import {OverrideWorld} from "./override.js";
 import logger from "../logger.js";
 import {processClassifications} from "./tables.js";
 import {StellarBody, StellarBodyPlanet, StellarBodyStar, StellarBodyType, UWPElements} from "./stellarBody.js";
+import {worldCluster} from "./bfs.js";
+import {Universe} from "../universe.js";
 
 
 export type UWPDMs = {
@@ -115,6 +117,7 @@ export class WorldGen {
         }
     }
 
+
     static getUWP(world: World): UWPElements {
         const uwp = world?.uwp;
 
@@ -182,6 +185,9 @@ export class WorldGen {
             if(stars[pos]) {
                 const orbit = random.die(6) + pos * 3 - 6;
                 const parent = rv[0].addStar(this, <string>stars[pos], orbit);
+                if(!parent) {
+                    continue;
+                }
                 rv.push(parent);
 
                 if(stars[pos+1]) {
@@ -293,7 +299,7 @@ export class WorldGen {
     }
 
     //static makeStarport(random: FluxRandom, dm: number, maxStarport: string|undefined, spaceportVsStarportDm: number = 0) {
-    static makeStarport(random: FluxRandom, maxStarport: string|undefined, dms: UWPDMs) {
+    static makeStarportOld(random: FluxRandom, maxStarport: string|undefined, dms: UWPDMs) {
         if(dms.fixedStarport) {
             return dms.fixedStarport;
         }
@@ -322,6 +328,37 @@ export class WorldGen {
             } else {
                 sp = 'X';
             }
+        }
+        return sp;
+    }
+
+    static makeStarport(random: FluxRandom, maxStarport: string|undefined, dms: UWPDMs) {
+        if(dms.fixedStarport) {
+            return dms.fixedStarport;
+        }
+        // We are possibly making a spaceport.
+        if(maxStarport) {
+            if(maxStarport < 'F' && (random.die()+(dms.spaceportVsStarportDm??0)) >= 2) {
+                // Generate a spaceport. 2:3 normally if not primary, but more chance if faction
+                const spRoll = random.die() + (dms.starport??0);
+                const starport = spRoll >= 4 ? 'F' : spRoll == 3 ? 'G' : spRoll>0 ? 'H' : 'X';
+                return starport;
+            }
+        }
+        let sp;
+        const roll = random.die(6,2);
+        if(roll < 5) {
+            sp = 'A';
+        } else if(roll < 7) {
+            sp = 'B';
+        } else if(roll < 9) {
+            sp = 'C';
+        } else if(roll < 10) {
+            sp = 'D';
+        } else if(roll < 12) {
+            sp = 'E';
+        } else {
+            sp = 'X';
         }
         return sp;
     }
@@ -405,7 +442,7 @@ export class WorldGen {
 
         if (roll < 1 + Math.floor(population / 2)) {
             govt = fromFaction.govt ?? 0;
-            techLevel = (fromFaction.techLevel ?? 0) + fluxAmountCalc(random, 2, 1);
+            techLevel = Math.max(0,(fromFaction.techLevel ?? 0) + fluxAmountCalc(random, 2, 1));
             lawLevel = (fromFaction.techLevel ?? 0) + fluxAmountCalc(random, 5, 5);
             starport = WorldGen.makeStarport(random, this.uwp.starport, dms);
         } else {
@@ -468,9 +505,9 @@ export class WorldGen {
 
         let techLevel;
         if(prevalentTL) {
-            techLevel = prevalentTL + fluxAmountCalc(random, 5, 1);
+            techLevel = Math.max(0,prevalentTL + fluxAmountCalc(random, 5, 1));
         } else {
-            techLevel = WorldGen.makeTL(random, starport, elements.size ?? 0, elements.atmosphere ?? 0, elements.hydrographic ?? 0, population, govt??0, dms.techLevel ?? 0);
+            techLevel = Math.max(0,WorldGen.makeTL(random, starport, elements.size ?? 0, elements.atmosphere ?? 0, elements.hydrographic ?? 0, population, govt??0, dms.techLevel ?? 0));
             const TLO = Math.ceil((techLevel - (this.world.techLevel??0))/2);
             if(TLO > 0) {
                 techLevel = (this.world.techLevel??0) + TLO;
@@ -859,8 +896,11 @@ export class WorldGen {
         }
     }
 
+    availableOrbits(): number {
+        return this.starBodies.reduce((pv,cv) => pv + [...cv.orbits].filter(o => o===undefined).length,0);
+    }
 
-    generatePlanets() {
+    generatePlanets(universe: Universe) {
         // Initialize the main faction ... if there is no main faction then all worlds will be empty
         if(this.uwp.population > 0) {
             this.factions.set(this.world.owner, this.uwp);
@@ -868,16 +908,17 @@ export class WorldGen {
 
         this.addPrimaryWorld();
         this.worldIdx = 1;
+        this.planets = Math.min(this.availableOrbits(), this.planets)
 
         // GGs
         let ggIdx = 0;
-        while(this.gg > 0) {
+        while(this.gg > 0 && this.planets > 0) {
             this.placeGG(this.random.sub(`GG-${ggIdx++}`));
         }
 
         // Belts
         let beltIdx = 0;
-        while(this.belts > 0) {
+        while(this.belts > 0 && this.belts > 0) {
             this.placeBelt(this.random.sub(`BELT-${beltIdx++}`));
         }
 
@@ -920,6 +961,268 @@ export class WorldGen {
                 }
             })
         }
+
+        // New Importance calc
+        this.economics(universe);
+    }
+
+
+    static worldResourceAndProduction(world: World, body: StellarBodyType) {
+        let belts = 0;
+        let rings = 0;
+        const BELT_EFFICIENCY = 3;
+        const GG_EFFICIENCY = 1;
+        const dataMap = new Map<StellarBody, Record<string,any>>();
+
+        WorldGen.iterateOverAll(body, (p, parent) => {
+            const data: Record<string,any> = {};
+            data.mining = 0;
+            data.agriculture = 0;
+            data.industry = 0;
+            data.pop = 0;
+            data.military = 0;
+            dataMap.set(p, data);
+            p.economics = data;
+            if ('uwp' in p && p.uwp !== undefined) {
+                const uwp = (<StellarBodyPlanet>p).uwp;
+                if(!Number.isFinite(uwp.population) || !Number.isFinite(uwp.size) || uwp.govt === 7) {
+                    return; // Ignore balkanized - look at the different related
+                }
+                data.pop = Math.pow(10, uwp?.population ?? 0) * (uwp?.populationDigit ?? 1);
+                data.uwp = uwp;
+
+                // Should probably work out how to include Starport in this stuff
+                const SP_PROD_MULT: any = {
+                    A: 2,
+                    B: 1.5,
+                    C: 1,
+                    D: 0.75,
+                    E: 0.5,
+                    X: 0.1,
+                    F: 1,
+                    G: 0.75,
+                    H: 0.5,
+                };
+                data.spProdMult = (SP_PROD_MULT?.[data.uwp?.starport ?? 'X'] as (number|undefined)) ?? 0.1
+
+                // Military
+                const MILITARY_GOVT_MULT = [
+                    0, 4, 2, 4, 3, 5, 0, 2,
+                    3, 4, 5, 3, 4, 5, 6, 6,
+                    6,
+                ];
+                const militaryMult = uwp.lawLevel / 3 + MILITARY_GOVT_MULT[uwp.govt];
+                data.military = assignedPop(data.pop, militaryMult / 100);
+                data.pop -= data.military;
+
+                // Mining
+                // Is it a belt?
+                if (uwp.size === 0) {
+                    let max = 1e7;
+                    let popRatio = 0.5;
+                    let pwData = data;
+                    if (uwp.atmosphere === 0) {
+                        ++belts;
+                    } else {
+                        if (!parent) {
+                            throw new Error('Boom')
+                        }
+                        pwData = dataMap.get(parent) ?? {};
+                        max = 1e6;
+                        popRatio = 0.1;
+                        ++rings;
+                    }
+
+                    // Was going to apply a type multiplier, but I think that rings vs asteroids simply have different
+                    // mining opportunities (actually a ring might be more efficient)
+                    // So ... popMult, TLMult, typeMult?
+                    const tlMult = pwData?.uwp?.techLevel >= 7 ? techMult(pwData?.uwp?.techLevel) : 0;
+                    const prodPop = assignedPop(pwData?.pop, popRatio, max);
+                    pwData.mining += BELT_EFFICIENCY * prodPop * tlMult * (pwData.spProdMult ?? 0);
+                    if(!Number.isFinite(pwData.mining)) throw new Error(`Boom`);
+                } else {
+                    // Opportunity is uwp.size * 1e6 which gives a maxPop
+                    const max = uwp.size * 1e6;
+                    data.mining = assignedPop(data.pop, 0.2, max) * techMult(uwp.techLevel) * data.spProdMult;
+                    if(!Number.isFinite(data.mining)) {
+                        throw new Error(`Boom`);
+                    }
+                }
+
+                if (parent && 'notes' in parent && (<StellarBodyPlanet><any>parent).uwp.notes.has('GG') && uwp.techLevel > 7) {
+                    // In orbit of a gas giant.  Add GG mining
+                    data.mining += GG_EFFICIENCY * assignedPop(data.pop, 0.01, (<StellarBodyPlanet><any>parent).uwp.size * 1e5) * techMult(uwp.techLevel);
+                    if(!Number.isFinite(data.mining)) throw new Error(`Boom`);
+                }
+
+                // Industry
+                {
+                    const IND_POPMULT = 0.33;
+                    data.indPop = assignedPop(data.pop, IND_POPMULT);
+                    data.industry = data.indPop * techMult(uwp.techLevel) * data.spProdMult;
+                }
+
+                // Agriculture
+                {
+                    const maxPop = Math.max(0,uwp.size * uwp.size * 1e6 * (10-uwp.hydrographic)/10 - data.indPop);
+                    let tempMult = 0;
+                    if(uwp.notes.has('Hz')) {
+                        tempMult = 1;
+                    } else if(uwp.notes.has('Tr') || uwp.notes.has('Ho')) {
+                        tempMult = 0.1;
+                    } else if(uwp.notes.has('Tu') || uwp.notes.has('Co')) {
+                        tempMult = 0.05;
+                    }
+                    const AGGMULT = [0, 0.01, 0.01, 0.05, 0.05, 0.25, 0.25, 1.5, 1.0, 1.5, 1.0, 0.05, 0, 0, 0.5, 0];
+                    const aggmult = AGGMULT[uwp.atmosphere];
+                    const waterMult = uwp.hydrographic === 0 ? 0.01 : uwp.hydrographic === 1 ? 0.1 : 1;
+                    data.aggPop = assignedPop(data.pop, aggmult / 10, maxPop) * tempMult * waterMult;
+                    data.agriculture = 100 * techMult(uwp.techLevel) * data.aggPop;
+                }
+
+
+            }
+        });
+
+
+        const result = dataMap.entries().reduce((pv, cv) => {
+            pv.mining += cv[1].mining;
+            pv.agriculture += cv[1].agriculture;
+            pv.industry += cv[1].industry;
+            pv.pop += cv[1].pop;
+            pv.military += cv[1].military;
+            return pv;
+        }, {mining: 0, agriculture:0, industry:0, pop:0, military:0, bases:0});
+        result.bases = world.bases.split('.').reduce((pv, cv) => pv + (this.BASE_TABLE[cv]??0),0);
+        body.economics = result;
+        return result;
+    }
+
+    static lll(v: number): number {
+        const l = v >= 1 ? Math.log10(v) : -1;
+        return Math.round(l);
+    }
+
+    static dispEconData(name: string, vals: any) {
+        console.log(`${name}: P=${this.lll(vals.pop)}/${this.lll(vals.military)} M=${this.lll(vals.mining)} A=${this.lll(vals.agriculture)} I=${this.lll(vals.military)}`);
+    }
+
+    static allegianceCode(val: string) {
+        if(val.length < 3) {
+            return val;
+        }
+        if(val.substring(0,2) === 'Cs') {
+            return val.substring(2);
+        }
+        return val.substring(0,2);
+    }
+    static ALLEGIANCE_TABLE: Record<string,number> = {
+        'BwDa': 0.25,
+        'BwIm': 0.25,
+        'BwSw': 0.25,
+        'BwZh': 0.01,
+        'DaIm': 0.5,
+        'DaSw': 0.01,
+        'DaZh': 0.01,
+        'ImSw': 0.05,
+        'ImZh': 0.01,
+        'SwZh': 0.25,
+    };
+    static BASE_TABLE: Record<string,number> = {
+        C: 1,//'Corsair Base',
+        D: 2, //'Naval Depot',
+        E: 0.5, //'Embassy',
+        H: 1, //'Hiver Supply Base', // For TNE
+        I: 1, //'Interface', // For TNE
+        K: 1, //'Naval Base',
+        L: 1, //'Naval Base', // Obsolete
+        M: 1, //'Military Base',
+        N: 1, //'Naval Base',
+        O: 0.5, //'Naval Outpost', // Obsolete
+        R: 1, //'Clan Base',
+        S: 0.5, //'Scout Base',
+        //    T: 'Terminus',   // For TNE - name Collision
+        T: 1, //'Tlauku Base',
+        V: 0.5, //'Exploration Base',
+        W: 2, //'Way Station',
+        X: 0.5, //'Relay Station', // Obsolete
+        Z: 2, //'Naval/Military Base' // Obsolete
+    };
+
+    static allegianceMult(al1: string, al2: string) {
+        const code1 = this.allegianceCode(al1);
+        const code2 = this.allegianceCode(al2);
+        if(code1 === 'Na' || code2 === 'Na') {
+            return 0.1;
+        }
+        if(code1 === code2) {
+            return 1;
+        }
+        if(code1 < code2) {
+            return this.ALLEGIANCE_TABLE[`${code1}${code2}`] ?? 0.1;
+        }
+        return this.ALLEGIANCE_TABLE[`${code2}${code1}`] ?? 0.1;
+    }
+
+    importance(universe: Universe) {
+        let weightedValue: number = 0;
+        function oneTradeWeight(economics?: Record<string,number>): number {
+            return ((economics?.mining ?? 0) +
+                (economics?.industry ?? 0) +
+                (economics?.agriculture ?? 0) +
+                (economics?.population ?? 0) / 1000 +
+                (economics?.military ?? 0)) * Math.pow(10,(economics?.bases??0));
+
+        }
+
+        if(this.world.zone !== 'R') {
+            const j1Cluster = worldCluster(universe, this.world, 1, w => w.zone !== 'R', 9);
+            const j2Cluster = worldCluster(universe, this.world, 2, w => w.zone !== 'R', 4);
+            const j3Cluster = worldCluster(universe, this.world, 3, w => w.zone !== 'R', 3);
+            const j4Cluster = worldCluster(universe, this.world, 4, w => w.zone !== 'R', 2);
+            const thisWorld = this.world;
+            function weightCalc(distanceMult: number) {
+                return (cur: number, [w, distance]: [World, number]) => {
+                    const gen = universe.generator(w);
+                    if (distance === 0) {
+                        return cur;
+                    }
+                    const production = oneTradeWeight(gen.system.economics);
+                    const almult = WorldGen.allegianceMult(w.allegiance, thisWorld.allegiance);
+                    return cur + production / Math.pow(distanceMult / almult, distance);
+                };
+            }
+
+            weightedValue =
+                j4Cluster.entries().reduce(weightCalc(1e9),
+                    j3Cluster.entries().reduce(weightCalc(1000000),
+                        j2Cluster.entries().reduce(weightCalc(1000),
+                            j1Cluster.entries().reduce(weightCalc(2), 0)
+                        )
+                    ));
+        }
+        const SPMULT: Record<string,number> = {
+            A: 2,
+            B: 1.5,
+            C: 1,
+            D: 0.1,
+            E: 0.01,
+            X: 0,
+        }
+        weightedValue *= (SPMULT[this.uwp.starport] ?? 0);
+        weightedValue = Math.max(1,weightedValue) * Math.max(1,oneTradeWeight(this.system.economics));
+        if(this.system.economics) {
+            this.system.economics.tradeValue = weightedValue/1e10;
+        }
+
+        console.log(`${this.world.name}: ${WorldGen.lll(weightedValue)-10}`);
+        WorldGen.dispEconData('\t', this.system.economics);
+    }
+
+    economics(universe: Universe) {
+        const vals = WorldGen.worldResourceAndProduction(this.world, this.system);
+
+        //console.log(`${this.world.hex}: cluster=${j1Cluster}/${Math.round(Math.sqrt(j1Cluster)-1)} ${j2Cluster}/${j2Cluster-j1Cluster}/${Math.round(Math.sqrt((j2Cluster-j1Cluster)/3))-1} ${j3Cluster}/${j3Cluster-j2Cluster}/${Math.round(Math.sqrt((j3Cluster-j2Cluster)/10))-1} ${j4Cluster}/${Math.max(j4Cluster-j3Cluster,0)}/${Math.round(Math.sqrt(Math.max(j4Cluster-j3Cluster,0)/30))-1}`);
     }
 
     static enrichNotes(random: FluxRandom, uwp: UWPElements) {
@@ -931,11 +1234,9 @@ export class WorldGen {
         WorldGen.enrichType(random.sub('LL'), 'LL', WorldGen.LAW_TYPES, uwp.lawLevel, 5, 5).forEach(e => uwp.notes.add(e));
     }
 
-    static enrichPlanets(world: World): OverrideWorld[] {
-        const wg = new WorldGen(world);
-
-        wg.generatePlanets();
-        //wg.iterateOverAll(wg.system, p => wg.enrichNotes(p))
+    static enrichPlanets(world: World, universe: Universe): OverrideWorld[] {
+        const wg = universe.generator(world);
+        wg.importance(universe);
 
         return [{
             hex: wg.world.hex,
@@ -944,12 +1245,12 @@ export class WorldGen {
             ...wg.starsToWorld('', wg.system)];
     }
 
-    iterateOverAll(body: StellarBody|undefined, process: (p: StellarBody) => void) {
+    static iterateOverAll(body: StellarBody|undefined, process: (p: StellarBody, parent: StellarBody|undefined) => void, parent?: StellarBody) {
         if(body === undefined) {
             return;
         }
-        process(body);
-        body.orbits?.forEach(p => this.iterateOverAll(p, process));
+        process(body, parent);
+        body.orbits?.forEach(p => this.iterateOverAll(p, process, body));
     }
 
     static factionCode(idx: number) {
@@ -958,7 +1259,7 @@ export class WorldGen {
 
     starsToWorld(suffix: string, body: StellarBodyType): OverrideWorld[] {
         let factions: OverrideWorld[] = [];
-        let base: OverrideWorld = {
+        let base: any = {
             hex: this.world.hex + (suffix ? suffix : '-*'),
             name: body.name,
         };
@@ -967,6 +1268,7 @@ export class WorldGen {
                 ...base,
                 name: `${body.name} [${body.star.trim()}]`,
                 stars: body.star.trim(),
+                economics: body.economics,
                 ...(<any>body)?.driveLimits,
             }
         }
@@ -976,6 +1278,7 @@ export class WorldGen {
                 uwp: WorldGen.encodeUwpElements(body.uwp),
                 notes: [...body.uwp.notes, ...(body.primary ? [Notes.MAINWORLD]: [])],
                 pbg: (body.uwp.population ?? 0) > 0 ? `${body.uwp.populationDigit ?? 1}**` : undefined,
+                economics: body.economics,
             };
             if(body.factions && body.factions.length) {
                 factions = body.factions.map((f,idx) => ({

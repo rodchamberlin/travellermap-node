@@ -17,7 +17,7 @@ program
     .option('--byWorld,-w', 'multiple output files by world-name', false)
     .addOption(new Option('--output <filename>', 'output file').makeOptionMandatory(true))
     .option('--log <string>', 'log level', 'error')
-    .arguments('<sector>')
+    .arguments('<sector> [hex]')
 ;
 program.parse();
 const opts = program.opts();
@@ -36,7 +36,13 @@ if(opts['byWorld']) {
 
 const universe = await Universe.getUniverse(opts['milieu']);
 const sector = universe.getSectorByName(program.args[0]);
-const result = sector?.enrichWorlds();
+let result;
+if(program.args[1] !== undefined) {
+    const w = sector?.lookupWorld(program.args[1]);
+    result = w?.enrichWorld(universe) ?? [];
+} else {
+    result = sector?.enrichWorlds(universe);
+}
 
 
 if(opts['byWorld']) {

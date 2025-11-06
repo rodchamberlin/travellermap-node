@@ -16,7 +16,32 @@ export function requestUniverse(req: WireRequest): Promise<Universe> {
     return Universe.getUniverse(milieu?.toString());
 }
 
+export const TLMULT1 = 1.3;
+export const TLMULT2 = 1.2;
+export const TLBREAK = 11;
+export function techMult(tl: number) {
+    if(tl === undefined) {
+        return 0;
+    }
+    if(tl > TLBREAK) {
+        return Math.pow(TLBREAK,TLMULT1) * Math.pow(tl-TLBREAK,TLMULT2);
+    } else {
+        return Math.pow(tl,TLMULT1);
+    }
+}
 
+
+export function assignedPop(pop: number, initRatio: number, max?: number|undefined) {
+    if(max === undefined) {
+        return pop*initRatio;
+    }
+    if(max === 0 || !Number.isFinite(max)) {
+        return 0;
+    }
+    const N = max / initRatio;
+    const prodPod = max * pop / (N + pop);
+    return prodPod;
+}
 
 export function absCoordinate(universe: Universe, query: Record<string,string>) {
     let x: number;

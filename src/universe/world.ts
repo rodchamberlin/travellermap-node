@@ -383,8 +383,8 @@ export class World {
         }
     }
 
-    enrichWorld(): OverrideWorld[]|undefined {
-        const planets = WorldGen.enrichPlanets(this);
+    enrichWorld(universe: Universe): OverrideWorld[]|undefined {
+        const planets = WorldGen.enrichPlanets(this, universe);
         return planets;
     }
 

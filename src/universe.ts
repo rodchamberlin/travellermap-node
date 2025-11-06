@@ -11,6 +11,7 @@ import logger from './logger.js';
 import {CaseInsensitiveFileResolver} from "./caseInsensitiveFileResolver.js";
 import {combinePartials} from "./util.js";
 import {inspect} from "node:util";
+import {WorldGen} from "./universe/worldGen.js";
 
 export type Milieu = {
     code: string;
@@ -65,6 +66,7 @@ export class Universe {
     static baseDir = path.join(process.cwd(), 'static', 'res', 'Sectors');
     static OVERRIDE_DIR = path.join(process.cwd(), 'static', 'res', 'overrides');
     protected sectors_: Map<string,Sector> = new Map<string, Sector>();
+    protected generators_: Map<World,WorldGen> = new Map();
     protected wikiUrl_: string|undefined;
     static readonly LOADER_LOOKUP: Record<string,(metadata: SectorMetadata, file: string) => Promise<Sector|undefined>> = {
         TabDelimited: (metadata, file) => Sector.loadFileTab(metadata, file),
@@ -518,6 +520,16 @@ export class Universe {
             }
             return ''
         });
+    }
+
+    generator(w: World): WorldGen {
+        let wg = this.generators_.get(w);
+        if(wg === undefined) {
+            wg = new WorldGen(w);
+            wg.generatePlanets(this);
+            this.generators_.set(w, wg);
+        }
+        return wg;
     }
 }
 

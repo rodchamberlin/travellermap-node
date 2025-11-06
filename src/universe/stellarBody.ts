@@ -1,6 +1,9 @@
+
 import {WorldGen} from "./worldGen.js";
 import {World} from "./world.js";
 import {FluxRandom} from "../util.js";
+import { inspect } from "node:util";
+import logger from "../logger.js";
 
 export type StellarBodyType=StellarBodyPlanet|StellarBodyStar|StellarBodyNoOrbit;
 
@@ -23,10 +26,16 @@ export class StellarBody {
     primary: boolean;
     parent: StellarBodyType | undefined;
     worldGen: WorldGen;
+    economics?: Record<string,any>;
 
     constructor(body: SBFields<StellarBody>) {
         this.name = body.name;
-        this.orbits = Array<undefined | StellarBodyType>(body.orbitCnt);
+        if(Number.isFinite(body.orbitCnt)) {
+            this.orbits = Array<undefined | StellarBodyType>(body.orbitCnt);
+        } else {
+            this.orbits = [];
+        }
+
         this.primary = body.primary;
         this.parent = body.parent;
         this.worldGen = body.worldGen;
@@ -80,9 +89,16 @@ export class StellarBody {
         return this.orbits?.findLastIndex(orbit => orbit == undefined) ?? -1;
     }
 
-    orbitalPosition(target: number): number {
+    orbitalPosition(target: number, isStar = false): number {
         const base = Math.max(Math.min(target, this.maxOrbit()),this.minOrbit());
         let pos = base;
+
+        if(base < 0 && isStar) {
+            pos = 0;
+            if(!this.orbits.length) {
+                this.orbits.push(undefined);
+            }
+        }
 
         while(this.orbits[pos]) {
             ++pos;
@@ -155,7 +171,12 @@ export class StellarBodyStar extends StellarBody {
     }
 
     addStar(worldGen: WorldGen, star: string, target: number) {
-        const orbit = this.orbitalPosition(target);
+        let orbit = this.orbitalPosition(target, true);
+        if(orbit < 0) {
+            // This implies that there are no orbits on the star.  We will create an orbit 0
+            logger.error(`Unable to place star ${star} in orbit of ${this.name}`)
+            return;
+        }
         const orbitCnt = StellarBodyStar.maxOrbitsForOrbit(orbit);
 
         const body = new StellarBodyStar({
